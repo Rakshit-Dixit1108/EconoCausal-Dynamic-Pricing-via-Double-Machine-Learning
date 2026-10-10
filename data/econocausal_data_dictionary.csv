@@ -1,0 +1,17 @@
+column,meaning,role_in_project
+customer_id,Unique synthetic customer identifier,Identifier; exclude from model features
+age,Customer age in years,Confounder / customer feature
+annual_income_inr,Approximate annual income in INR,Confounder / customer feature
+past_purchases_12m,Purchases in previous 12 months,Confounder / customer feature
+days_since_last_purchase,Days since most recent purchase,Confounder / customer feature
+website_visits_30d,Website visits in previous 30 days,Confounder / customer feature
+email_engagement_score,Synthetic engagement score from 0 to 1,Confounder / customer feature
+customer_segment,"budget, regular, or premium",Categorical customer feature
+region,Synthetic customer region,Categorical customer feature
+season,"regular, festival, or sale_event",Categorical context feature
+discount_received,"1 if a discount was offered, otherwise 0",Binary treatment indicator
+discount_percent,"Discount offered: 0, 5, 10, or 20 percent",Treatment intensity
+purchased,"1 if the customer purchased, otherwise 0",Primary outcome
+basket_value_inr,Simulated basket value before discount; zero if no purchase,Business outcome
+discount_cost_inr,Simulated discount cost for purchasing customers,Business outcome
+net_revenue_inr,Basket value less simulated discount cost,Business outcome
