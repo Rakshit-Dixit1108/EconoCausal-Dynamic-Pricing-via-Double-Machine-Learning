@@ -43,8 +43,6 @@ from econml.dml import LinearDML
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.preprocessing import OneHotEncoder
-
-
 FEATURE_COLUMNS = [
     "age",
     "annual_income_inr",
@@ -125,6 +123,9 @@ def estimate_treatment_effects(data_path):
     effects = model.effect(X, T0=0, T1=1)
     average_effect = float(effects.mean())
 
+    ate_inference = model.ate_inference(X)
+    ate_interval = model.ate_interval(X, alpha=0.05)
+
     return {
         "rows": len(df),
         "treatment": TREATMENT_COLUMN,
@@ -133,4 +134,8 @@ def estimate_treatment_effects(data_path):
         "average_effect_percentage_points": average_effect * 100,
         "individual_effects": effects,
         "model": model,
+        "ate_confidence_interval": tuple(
+            float(value) for value in ate_interval
+        ),
+        "ate_inference": ate_inference,
     }
