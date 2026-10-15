@@ -1,11 +1,14 @@
+
 import pandas as pd
 from causal_service import validate_causal_columns
 
 cases = [
-    ("valid", [0, 1], [0, 1], True),
-    ("invalid treatment", [0, 2], [0, 1], False),
-    ("missing outcome", [0, 1], [0, None], False),
-    ("one treatment group", [1, 1], [0, 1], False),
+    ("valid continuous treatment", [0, 5, 10, 20], [0, 1, 0, 1], True),
+    ("negative discount", [0, -5, 10, 20], [0, 1, 0, 1], False),
+    ("invalid outcome", [0, 5, 10, 20], [0, 2, 0, 1], False),
+    ("missing outcome", [0, 5, 10, 20], [0, None, 0, 1], False),
+    ("one discount level", [5, 5, 5, 5], [0, 1, 0, 1], False),
+    ("non-numeric treatment", [0, "abc", 10, 20], [0, 1, 0, 1], False),
 ]
 
 for name, t, y, should_pass in cases:
