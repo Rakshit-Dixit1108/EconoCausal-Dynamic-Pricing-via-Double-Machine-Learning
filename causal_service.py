@@ -8,7 +8,8 @@ from econml.dml import LinearDML
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import OneHotEncoder
-
+from sklearn.model_selection import KFold, cross_val_predict
+from sklearn.metrics import mean_squared_error, r2_score
 
 FEATURE_COLUMNS = [
     "age",
@@ -69,6 +70,48 @@ def validate_causal_columns(df, treatment_col, outcome_col):
         "status": "validated",
     }
 
+
+def calculate_nuisance_diagnostics(X, T, Y):
+    """Evaluate nuisance-model predictions using cross-validation."""
+
+    cv = KFold(n_splits=3, shuffle=True, random_state=42)
+
+    model_y = RandomForestRegressor(
+        n_estimators=100,
+        min_samples_leaf=10,
+        random_state=42,
+        n_jobs=-1,
+    )
+
+    model_t = RandomForestRegressor(
+        n_estimators=100,
+        min_samples_leaf=10,
+        random_state=42,
+        n_jobs=-1,
+    )
+
+    # Out-of-fold predictions: each row is predicted without
+    # training the prediction model on that row.
+    predicted_y = cross_val_predict(model_y, X, Y, cv=cv)
+    predicted_t = cross_val_predict(model_t, X, T, cv=cv)
+
+    residual_y = Y - predicted_y
+    residual_t = T - predicted_t
+
+    return {
+        "outcome_model": {
+            "r2": float(r2_score(Y, predicted_y)),
+            "rmse": float(np.sqrt(mean_squared_error(Y, predicted_y))),
+            "residual_mean": float(np.mean(residual_y)),
+            "residual_std": float(np.std(residual_y)),
+        },
+        "treatment_model": {
+            "r2": float(r2_score(T, predicted_t)),
+            "rmse": float(np.sqrt(mean_squared_error(T, predicted_t))),
+            "residual_mean": float(np.mean(residual_t)),
+            "residual_std": float(np.std(residual_t)),
+        },
+    }
 
 def estimate_treatment_effects(
     data_path,
@@ -158,6 +201,13 @@ def estimate_treatment_effects(
     )
 
     X = preprocessor.fit_transform(df[FEATURE_COLUMNS])
+    nuisance_diagnostics = calculate_nuisance_diagnostics(
+        X, T, Y
+    )
+
+    print("\n=== NUISANCE MODEL DIAGNOSTICS ===")
+    print("Outcome model:", nuisance_diagnostics["outcome_model"])
+    print("Treatment model:", nuisance_diagnostics["treatment_model"])
 
     # Continuous treatment: use a regressor for both nuisance models.
     model = LinearDML(
@@ -222,5 +272,7 @@ def estimate_treatment_effects(
             float(value) * 100 for value in ate_interval
         ),
         "ate_inference": ate_inference,
+        "nuisance_diagnostics": nuisance_diagnostics,
         "validation": validation,
+
     }
