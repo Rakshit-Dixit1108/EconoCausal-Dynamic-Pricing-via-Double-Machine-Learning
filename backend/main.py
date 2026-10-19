@@ -1,3 +1,4 @@
+
 """FastAPI application for the EconoCausal project."""
 
 from fastapi import FastAPI, HTTPException, Query
@@ -8,15 +9,16 @@ from optimization import (
     analyze_discount_levels,
     recommend_discount,
 )
+from customer_effects import estimate_segment_effects
 
 
 app = FastAPI(
     title="EconoCausal API",
     description=(
-        "API for customer data validation and exploratory "
-        "discount optimization."
+        "API for customer data validation, exploratory "
+        "discount optimization, and customer segment effects."
     ),
-    version="1.0.0",
+    version="1.1.0",
 )
 
 # Permit requests from the local Vite frontend and admin frontend.
@@ -41,6 +43,12 @@ def root():
         "project": "EconoCausal",
         "message": "EconoCausal API is running.",
         "docs": "/docs",
+        "endpoints": [
+            "/health",
+            "/data-summary",
+            "/optimization",
+            "/segment-effects",
+        ],
     }
 
 
@@ -106,8 +114,9 @@ def optimization(
             budget_inr=budget_inr,
         )
 
-        # Convert pandas/numpy values to ordinary JSON-compatible values.
+        # Convert pandas/numpy values to JSON-compatible values.
         discount_levels = []
+
         for _, row in summary.iterrows():
             discount_levels.append({
                 "discount_percent": float(row["discount_percent"]),
@@ -124,6 +133,7 @@ def optimization(
             })
 
         recommendation = None
+
         if best is not None:
             recommendation = {
                 "discount_percent": float(
@@ -173,4 +183,60 @@ def optimization(
         raise HTTPException(
             status_code=500,
             detail="Unable to generate discount analysis.",
+        ) from exc
+
+
+@app.get("/segment-effects")
+def segment_effects():
+    """Return estimated discount effects for each customer segment."""
+    try:
+        # This currently fits the causal model on each request.
+        gate_model = estimate_segment_effects()
+        intervals = gate_model.confint(level=0.95)
+
+        segments = []
+
+        for group, row in intervals.iterrows():
+            effect = float(row["effect"])
+            lower = float(row["2.5 %"])
+            upper = float(row["97.5 %"])
+
+            segments.append({
+                "segment": str(group).replace("Group_", ""),
+                "effect": round(effect, 6),
+                "effect_percentage_points": round(
+                    effect * 100, 2
+                ),
+                "confidence_interval_95": {
+                    "lower": round(lower, 6),
+                    "upper": round(upper, 6),
+                },
+                "confidence_interval_percentage_points": {
+                    "lower": round(lower * 100, 2),
+                    "upper": round(upper * 100, 2),
+                },
+            })
+
+        return {
+            "status": "success",
+            "analysis_type": "group_average_treatment_effect",
+            "outcome": "purchase_probability",
+            "treatment": "discount_received",
+            "segments": segments,
+            "limitations": [
+                "Results are group-level estimates, not individual customer effects.",
+                "Causal interpretation depends on identification assumptions.",
+                "A confidence interval containing zero indicates uncertainty about the direction of the effect.",
+            ],
+        }
+
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to estimate customer segment effects.",
         ) from exc
