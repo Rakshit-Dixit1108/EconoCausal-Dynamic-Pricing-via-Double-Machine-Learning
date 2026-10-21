@@ -5,14 +5,10 @@ import numpy as np
 import pandas as pd
 
 from econml.dml import LinearDML
-from sklearn.ensemble import (
-    RandomForestClassifier,
-    RandomForestRegressor,
-)
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
 
 
 DATA_PATH = Path("data/econocausal_synthetic_customers.csv")
@@ -34,6 +30,9 @@ DISCOUNT_LEVELS = [0, 5, 10, 20]
 
 
 def load_and_validate_data():
+    if not DATA_PATH.exists():
+        raise FileNotFoundError(f"Dataset not found: {DATA_PATH}")
+
     df = pd.read_csv(DATA_PATH)
 
     required = [
@@ -55,7 +54,9 @@ def load_and_validate_data():
 
     observed = sorted(df["discount_percent"].unique().tolist())
     if observed != DISCOUNT_LEVELS:
-        raise ValueError(f"Expected {DISCOUNT_LEVELS}; found {observed}")
+        raise ValueError(
+            f"Expected discount levels {DISCOUNT_LEVELS}; found {observed}"
+        )
 
     if not set(df["purchased"].unique()).issubset({0, 1}):
         raise ValueError("'purchased' must contain only 0 and 1.")
@@ -74,7 +75,7 @@ def build_features(df):
                 "categorical",
                 OneHotEncoder(
                     drop="first",
-                    handle_unknown="ignore"
+                    handle_unknown="ignore",
                 ),
                 categorical,
             ),
@@ -88,7 +89,6 @@ def main():
     df = load_and_validate_data()
     X = build_features(df)
 
-    # Treatment has four categories: 0%, 5%, 10%, and 20%.
     T = df["discount_percent"].to_numpy()
     Y = df["purchased"].to_numpy()
 
@@ -116,22 +116,29 @@ def main():
         cv=cv,
         random_state=42,
     )
+
+    # Fit the multi-level causal model.
     model.fit(Y, T, X=X)
+
     results = pd.DataFrame({
         "customer_id": df["customer_id"],
     })
 
     summary = []
 
-    # Compare every discount level against 0%.
+    # Compare each discount level against the 0% baseline.
     for level in [5, 10, 20]:
         effect = np.asarray(
             model.effect(X, T0=0, T1=level)
         ).reshape(-1)
 
+        if not np.isfinite(effect).all():
+            raise ValueError(
+                f"Non-finite customer effects found for {level}% vs 0%."
+            )
+
         results[f"effect_{level}_vs_0_pp"] = effect * 100
 
-        
         ate = float(np.mean(effect))
 
         lower, upper = model.ate_interval(
@@ -141,18 +148,20 @@ def main():
             alpha=0.05,
         )
 
+        lower = float(np.asarray(lower).squeeze())
+        upper = float(np.asarray(upper).squeeze())
+
         summary.append({
             "comparison": f"{level}% vs 0%",
             "ate_percentage_points": ate * 100,
-            "ci_lower_pp": float(lower) * 100,
-            "ci_upper_pp": float(upper) * 100,
+            "ci_lower_pp": lower * 100,
+            "ci_upper_pp": upper * 100,
         })
-
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     results.to_csv(OUTPUT_PATH, index=False)
 
-    print("Multi-level DML completed.")
+    print("\nMulti-level DML completed.")
     print(f"Customers analyzed: {len(results)}")
     print(f"Customer effects saved to: {OUTPUT_PATH}")
     print("\nEstimated average effects vs 0% discount:")
