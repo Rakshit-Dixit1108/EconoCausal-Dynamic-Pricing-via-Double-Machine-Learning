@@ -1,7 +1,12 @@
 
 """FastAPI application for the EconoCausal project."""
 
-from fastapi import FastAPI, HTTPException, Query
+from pathlib import Path
+import shutil
+import tempfile
+
+import pandas as pd
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 from data_service import load_data, get_data_summary
@@ -18,10 +23,14 @@ app = FastAPI(
         "API for customer data validation, exploratory "
         "discount optimization, and customer segment effects."
     ),
-    version="1.1.0",
+    version="1.2.0",
 )
 
-# Permit requests from the local Vite frontend and admin frontend.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
+IMPORTED_DATA_PATH = DATA_DIR / "imported_customers.csv"
+DEFAULT_DATA_PATH = DATA_DIR / "econocausal_synthetic_customers.csv"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -31,9 +40,19 @@ app.add_middleware(
         "http://127.0.0.1:5174",
     ],
     allow_credentials=True,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+def load_current_data():
+    """Load the imported dataset when available; otherwise use the default."""
+    selected_path = (
+        IMPORTED_DATA_PATH
+        if IMPORTED_DATA_PATH.exists()
+        else DEFAULT_DATA_PATH
+    )
+    return load_data(file_path=selected_path)
 
 
 @app.get("/")
@@ -46,6 +65,7 @@ def root():
         "endpoints": [
             "/health",
             "/data-summary",
+            "/upload-csv",
             "/optimization",
             "/segment-effects",
         ],
@@ -61,22 +81,82 @@ def health():
     }
 
 
-@app.get("/data-summary")
-def data_summary():
-    """Return dataset validation and summary statistics."""
+@app.post("/upload-csv")
+def upload_csv(file: UploadFile = File(...)):
+    """Validate a customer CSV and make it the active dataset."""
+    if not file.filename or Path(file.filename).suffix.lower() != ".csv":
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload a file with the .csv extension.",
+        )
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+
     try:
-        df = load_data()
+        # Save to a temporary file first. Do not replace active data
+        # unless the uploaded dataset passes validation.
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            suffix=".csv",
+            dir=DATA_DIR,
+            delete=False,
+        ) as temp_file:
+            temporary_path = Path(temp_file.name)
+            shutil.copyfileobj(file.file, temp_file)
+
+        # Validates required columns, IDs, numeric fields and model variables.
+        df = load_data(file_path=temporary_path)
+
+        # Activate the upload only after validation succeeds.
+        temporary_path.replace(IMPORTED_DATA_PATH)
+        temporary_path = None
+
         summary = get_data_summary(df)
 
         return {
             "status": "success",
-            "data": summary,
+            "message": "Dataset imported and validated successfully.",
+            "filename": Path(file.filename).name,
+            "active_dataset": IMPORTED_DATA_PATH.name,
+            "rows": int(len(df)),
+            "columns": int(len(df.columns)),
+            "column_names": list(df.columns),
+            "summary": summary,
         }
-    except (FileNotFoundError, ValueError) as exc:
+
+    except (ValueError, pd.errors.ParserError) as exc:
         raise HTTPException(
-            status_code=500,
+            status_code=422,
+            detail=f"Dataset validation failed: {exc}",
+        ) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=422,
             detail=str(exc),
         ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to import the dataset.",
+        ) from exc
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        file.file.close()
+
+
+@app.get("/data-summary")
+def data_summary():
+    """Return summary statistics for the active dataset."""
+    try:
+        df = load_current_data()
+        return {
+            "status": "success",
+            "data": get_data_summary(df),
+        }
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -97,15 +177,10 @@ def optimization(
         description="Number of customers to evaluate.",
     ),
 ):
-    """Compare observed discount levels and return a recommendation.
-
-    This is an exploratory comparison of observed data, not an
-    estimate of personalized causal effects or business profit.
-    """
+    """Compare observed discount levels; this is not a causal estimate."""
     try:
-        df = load_data()
+        df = load_current_data()
         summary = analyze_discount_levels(df)
-
         target_customers = customers or len(df)
 
         best, candidates = recommend_discount(
@@ -114,9 +189,7 @@ def optimization(
             budget_inr=budget_inr,
         )
 
-        # Convert pandas/numpy values to JSON-compatible values.
         discount_levels = []
-
         for _, row in summary.iterrows():
             discount_levels.append({
                 "discount_percent": float(row["discount_percent"]),
@@ -133,28 +206,17 @@ def optimization(
             })
 
         recommendation = None
-
         if best is not None:
             recommendation = {
-                "discount_percent": float(
-                    best["discount_percent"]
-                ),
+                "discount_percent": float(best["discount_percent"]),
                 "avg_net_revenue_inr": round(
                     float(best["avg_net_revenue_inr"]), 2
                 ),
                 "estimated_total_discount_cost_inr": round(
-                    float(
-                        best["estimated_total_discount_cost_inr"]
-                    ),
-                    2,
+                    float(best["estimated_total_discount_cost_inr"]), 2
                 ),
                 "customers_evaluated": target_customers,
             }
-
-        eligible_levels = [
-            float(row["discount_percent"])
-            for _, row in candidates.iterrows()
-        ]
 
         return {
             "status": "success",
@@ -162,23 +224,21 @@ def optimization(
             "customers_evaluated": target_customers,
             "budget_inr": budget_inr,
             "discount_levels": discount_levels,
-            "eligible_discount_levels": eligible_levels,
+            "eligible_discount_levels": [
+                float(row["discount_percent"])
+                for _, row in candidates.iterrows()
+            ],
             "recommendation": recommendation,
             "limitations": [
                 "Observed comparisons do not establish causation.",
-                "This endpoint does not estimate individual "
-                "customer treatment effects.",
+                "This endpoint does not estimate individual customer effects.",
                 "Net revenue is not profit.",
-                "Budget estimates assume observed average discount "
-                "costs are representative of the target customers.",
+                "Budget estimates assume observed average discount costs "
+                "are representative of the target customers.",
             ],
         }
-
     except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=str(exc),
-        ) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -188,14 +248,14 @@ def optimization(
 
 @app.get("/segment-effects")
 def segment_effects():
-    """Return estimated discount effects for each customer segment."""
+    """Estimate group-level discount effects using the existing model."""
     try:
-        # This currently fits the causal model on each request.
+        # Note: this model currently loads its dataset through causal_model.py.
+        # We will connect it to the active imported dataset in a later step.
         gate_model = estimate_segment_effects()
         intervals = gate_model.confint(level=0.95)
 
         segments = []
-
         for group, row in intervals.iterrows():
             effect = float(row["effect"])
             lower = float(row["2.5 %"])
@@ -204,9 +264,7 @@ def segment_effects():
             segments.append({
                 "segment": str(group).replace("Group_", ""),
                 "effect": round(effect, 6),
-                "effect_percentage_points": round(
-                    effect * 100, 2
-                ),
+                "effect_percentage_points": round(effect * 100, 2),
                 "confidence_interval_95": {
                     "lower": round(lower, 6),
                     "upper": round(upper, 6),
@@ -226,15 +284,11 @@ def segment_effects():
             "limitations": [
                 "Results are group-level estimates, not individual customer effects.",
                 "Causal interpretation depends on identification assumptions.",
-                "A confidence interval containing zero indicates uncertainty about the direction of the effect.",
+                "A confidence interval containing zero indicates uncertainty.",
             ],
         }
-
     except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=str(exc),
-        ) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=500,
