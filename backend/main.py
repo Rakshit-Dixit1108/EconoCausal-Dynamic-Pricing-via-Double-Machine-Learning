@@ -10,20 +10,18 @@ from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 from data_service import load_data, get_data_summary
-from optimization import (
-    analyze_discount_levels,
-    recommend_discount,
-)
+from optimization import analyze_discount_levels, recommend_discount
 from customer_effects import estimate_segment_effects
+from spending_clustering import run_spending_clustering
 
 
 app = FastAPI(
     title="EconoCausal API",
     description=(
-        "API for customer data validation, exploratory "
-        "discount optimization, and customer segment effects."
+        "API for customer data validation, exploratory discount "
+        "optimization, customer segment effects, and spending clusters."
     ),
-    version="1.2.0",
+    version="1.3.0",
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -61,6 +59,7 @@ def root():
     return {
         "project": "EconoCausal",
         "message": "EconoCausal API is running.",
+        "version": "1.3.0",
         "docs": "/docs",
         "endpoints": [
             "/health",
@@ -68,6 +67,7 @@ def root():
             "/upload-csv",
             "/optimization",
             "/segment-effects",
+            "/spending-clusters",
         ],
     }
 
@@ -105,7 +105,7 @@ def upload_csv(file: UploadFile = File(...)):
             temporary_path = Path(temp_file.name)
             shutil.copyfileobj(file.file, temp_file)
 
-        # Validates required columns, IDs, numeric fields and model variables.
+        # Validate the uploaded dataset.
         df = load_data(file_path=temporary_path)
 
         # Activate the upload only after validation succeeds.
@@ -130,16 +130,19 @@ def upload_csv(file: UploadFile = File(...)):
             status_code=422,
             detail=f"Dataset validation failed: {exc}",
         ) from exc
+
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=422,
             detail=str(exc),
         ) from exc
+
     except Exception as exc:
         raise HTTPException(
             status_code=500,
             detail="Unable to import the dataset.",
         ) from exc
+
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
@@ -155,8 +158,13 @@ def data_summary():
             "status": "success",
             "data": get_data_summary(df),
         }
+
     except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -190,6 +198,7 @@ def optimization(
         )
 
         discount_levels = []
+
         for _, row in summary.iterrows():
             discount_levels.append({
                 "discount_percent": float(row["discount_percent"]),
@@ -206,6 +215,7 @@ def optimization(
             })
 
         recommendation = None
+
         if best is not None:
             recommendation = {
                 "discount_percent": float(best["discount_percent"]),
@@ -237,8 +247,13 @@ def optimization(
                 "are representative of the target customers.",
             ],
         }
+
     except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -250,12 +265,12 @@ def optimization(
 def segment_effects():
     """Estimate group-level discount effects using the existing model."""
     try:
-        # Note: this model currently loads its dataset through causal_model.py.
-        # We will connect it to the active imported dataset in a later step.
+        # This model currently loads its dataset through causal_model.py.
         gate_model = estimate_segment_effects()
         intervals = gate_model.confint(level=0.95)
 
         segments = []
+
         for group, row in intervals.iterrows():
             effect = float(row["effect"])
             lower = float(row["2.5 %"])
@@ -287,10 +302,74 @@ def segment_effects():
                 "A confidence interval containing zero indicates uncertainty.",
             ],
         }
+
     except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+
     except Exception as exc:
         raise HTTPException(
             status_code=500,
             detail="Unable to estimate customer segment effects.",
+        ) from exc
+
+
+@app.get("/spending-clusters")
+def spending_clusters():
+    """Return K-Means clusters based on income and spending."""
+    try:
+        # This currently runs the clustering script on its configured dataset.
+        result = run_spending_clustering()
+        profile = result["profile"]
+
+        cluster_profiles = []
+
+        for cluster_id, row in profile.iterrows():
+            cluster_profiles.append({
+                "cluster_id": int(cluster_id),
+                "customer_count": int(row["customer_count"]),
+                "average_income_inr": float(row["average_income"]),
+                "average_basket_value_inr": float(
+                    row["average_basket_value"]
+                ),
+                "average_purchases_12m": float(
+                    row["average_purchases_12m"]
+                ),
+            })
+
+        return {
+            "status": "success",
+            "algorithm": "K-Means",
+            "features": [
+                "annual_income_inr",
+                "basket_value_inr",
+                "past_purchases_12m",
+            ],
+            "selected_cluster_count": int(result["best_k"]),
+            "silhouette_scores": {
+                str(k): float(score)
+                for k, score in result["silhouette_scores"].items()
+            },
+            "cluster_profiles": cluster_profiles,
+            "output_file": "data/customer_spending_clusters.csv",
+            "limitations": [
+                "Clustering is descriptive and does not establish causation.",
+                "Only purchasers are assigned to spending clusters.",
+                "Silhouette score alone does not establish business usefulness.",
+                "Cluster IDs are arbitrary labels.",
+            ],
+        }
+
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to generate spending clusters.",
         ) from exc
