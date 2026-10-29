@@ -24,10 +24,12 @@ app = FastAPI(
     version="1.3.0",
 )
 
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 IMPORTED_DATA_PATH = DATA_DIR / "imported_customers.csv"
 DEFAULT_DATA_PATH = DATA_DIR / "econocausal_synthetic_customers.csv"
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -84,6 +86,7 @@ def health():
 @app.post("/upload-csv")
 def upload_csv(file: UploadFile = File(...)):
     """Validate a customer CSV and make it the active dataset."""
+
     if not file.filename or Path(file.filename).suffix.lower() != ".csv":
         raise HTTPException(
             status_code=400,
@@ -186,6 +189,7 @@ def optimization(
     ),
 ):
     """Compare observed discount levels; this is not a causal estimate."""
+
     try:
         df = load_current_data()
         summary = analyze_discount_levels(df)
@@ -243,8 +247,10 @@ def optimization(
                 "Observed comparisons do not establish causation.",
                 "This endpoint does not estimate individual customer effects.",
                 "Net revenue is not profit.",
-                "Budget estimates assume observed average discount costs "
-                "are representative of the target customers.",
+                (
+                    "Budget estimates assume observed average discount costs "
+                    "are representative of the target customers."
+                ),
             ],
         }
 
@@ -263,10 +269,12 @@ def optimization(
 
 @app.get("/segment-effects")
 def segment_effects():
-    """Estimate group-level discount effects using the existing model."""
+    """Estimate group-level discount effects using the active dataset."""
+
     try:
-        # This model currently loads its dataset through causal_model.py.
-        gate_model = estimate_segment_effects()
+        # Use the currently active dataset, including a valid CSV upload.
+        df = load_current_data()
+        gate_model = estimate_segment_effects(df)
         intervals = gate_model.confint(level=0.95)
 
         segments = []
@@ -297,7 +305,10 @@ def segment_effects():
             "treatment": "discount_received",
             "segments": segments,
             "limitations": [
-                "Results are group-level estimates, not individual customer effects.",
+                (
+                    "Results are group-level estimates, not individual "
+                    "customer effects."
+                ),
                 "Causal interpretation depends on identification assumptions.",
                 "A confidence interval containing zero indicates uncertainty.",
             ],
@@ -319,9 +330,11 @@ def segment_effects():
 @app.get("/spending-clusters")
 def spending_clusters():
     """Return K-Means clusters based on income and spending."""
+
     try:
-        # This currently runs the clustering script on its configured dataset.
-        result = run_spending_clustering()
+        # Use the currently active dataset, including a valid CSV upload.
+        df = load_current_data()
+        result = run_spending_clustering(df)
         profile = result["profile"]
 
         cluster_profiles = []
