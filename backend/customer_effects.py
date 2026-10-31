@@ -6,10 +6,26 @@ import pandas as pd
 from causal_model import load_data, estimate_discount_effect
 
 
-def estimate_segment_effects():
+def estimate_segment_effects(df=None):
     """Estimate group-level discount effects with confidence intervals."""
 
-    df = load_data()
+    # Load the default dataset only when no dataset is supplied.
+    if df is None:
+        df = load_data()
+    else:
+        df = df.copy()
+
+    # Validate required column.
+    if "customer_segment" not in df.columns:
+        raise ValueError(
+            "Dataset must contain the 'customer_segment' column."
+        )
+
+    # Remove rows with missing segment labels.
+    df = df.dropna(subset=["customer_segment"]).copy()
+
+    if df.empty:
+        raise ValueError("No valid customer segments found.")
 
     print("\n" + "=" * 60)
     print("CUSTOMER SEGMENT CAUSAL ANALYSIS")
