@@ -5,10 +5,10 @@ import numpy as np
 import pandas as pd
 
 from econml.dml import LinearDML
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import OneHotEncoder
-from sklearn.compose import ColumnTransformer
 
 
 DATA_PATH = Path("data/econocausal_synthetic_customers.csv")
@@ -99,18 +99,21 @@ def main():
     )
 
     model = LinearDML(
-        model_y=RandomForestRegressor(
-            n_estimators=100,
+        model_y=RandomForestClassifier(
+            n_estimators=200,
             min_samples_leaf=10,
+            max_features="sqrt",
             random_state=42,
             n_jobs=-1,
         ),
         model_t=RandomForestClassifier(
-            n_estimators=100,
+            n_estimators=200,
             min_samples_leaf=10,
+            max_features="sqrt",
             random_state=42,
             n_jobs=-1,
         ),
+        discrete_outcome=True,
         discrete_treatment=True,
         categories=DISCOUNT_LEVELS,
         cv=cv,
@@ -126,7 +129,7 @@ def main():
 
     summary = []
 
-    # Compare each discount level against the 0% baseline.
+    # Estimate each discount level's effect relative to 0%.
     for level in [5, 10, 20]:
         effect = np.asarray(
             model.effect(X, T0=0, T1=level)

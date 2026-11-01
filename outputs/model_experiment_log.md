@@ -78,5 +78,55 @@
 
 Compare the baseline with a classifier-based outcome model appropriate for the binary purchase outcome. Record configuration, runtime, effect estimates, and validation results before deciding whether the change improves the model.
 
+\## Experiment 2: Classifier-Based Outcome Model
+
+
+
+\*\*Changes from baseline\*\*
+
+\- Outcome model changed from RandomForestRegressor to RandomForestClassifier.
+
+\- Treatment model remains RandomForestClassifier.
+
+\- Number of trees increased from 100 to 200.
+
+\- `max\_features="sqrt"` added.
+
+\- `discrete\_outcome=True` enabled.
+
+
+
+\*\*Results\*\*
+
+
+
+| Comparison | Estimated ATE (percentage points) |
+
+|---|---:|
+
+| 5% vs 0% | 0.953803 |
+
+| 10% vs 0% | 6.272289 |
+
+| 20% vs 0% | 10.287294 |
+
+
+
+\*\*Validation\*\*
+
+\- Model completed for 5,000 customers.
+
+\- Automated tests: 11 passed.
+
+\- Runtime for test suite: 25.72 seconds.
+
+
+
+\*\*Interpretation\*\*
+
+
+
+The estimated effects changed slightly relative to the baseline. This does not establish better predictive accuracy or more reliable causal estimates. Further predictive evaluation and causal robustness checks are needed before selecting the final configuration.
+
 
 
