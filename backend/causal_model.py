@@ -1,3 +1,4 @@
+
 from pathlib import Path
 
 import pandas as pd
@@ -8,7 +9,10 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 
 
-# Locate the project and dataset.
+# ============================================================
+# PROJECT PATHS
+# ============================================================
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DATA_PATH = (
@@ -17,6 +21,10 @@ DATA_PATH = (
     / "econocausal_synthetic_customers.csv"
 )
 
+
+# ============================================================
+# FEATURES
+# ============================================================
 
 # Features measured before treatment.
 NUMERIC_FEATURES = [
@@ -36,6 +44,10 @@ CATEGORICAL_FEATURES = [
 
 FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 
+
+# ============================================================
+# DATA LOADING AND VALIDATION
+# ============================================================
 
 def load_data():
     """Load and validate the data needed for causal estimation."""
@@ -64,11 +76,20 @@ def load_data():
             "Missing values exist in the modeling columns."
         )
 
+    # Validate numeric features.
+    for column in NUMERIC_FEATURES:
+        df[column] = pd.to_numeric(
+            df[column],
+            errors="raise"
+        )
+
+    # Validate treatment variable.
     if set(df["discount_received"].unique()) != {0, 1}:
         raise ValueError(
             "discount_received must contain both 0 and 1."
         )
 
+    # Validate outcome variable.
     if set(df["purchased"].unique()) - {0, 1}:
         raise ValueError(
             "purchased must be a binary outcome: 0 or 1."
@@ -76,6 +97,10 @@ def load_data():
 
     return df
 
+
+# ============================================================
+# DOUBLE MACHINE LEARNING MODEL
+# ============================================================
 
 def estimate_discount_effect(df):
     """Estimate the average effect of receiving any discount."""
@@ -85,21 +110,29 @@ def estimate_discount_effect(df):
     print("=" * 60)
 
     print(f"Customers: {len(df)}")
+
     print(
         "Received a discount:",
-        int(df["discount_received"].sum()),
-    )
-    print(
-        "Received no discount:",
-        int((df["discount_received"] == 0).sum()),
+        int(df["discount_received"].sum())
     )
 
-    # Select the variables needed for causal estimation.
+    print(
+        "Received no discount:",
+        int((df["discount_received"] == 0).sum())
+    )
+
+    # --------------------------------------------------------
+    # STEP 1: SELECT MODELING VARIABLES
+    # --------------------------------------------------------
+
     model_data = df[
         FEATURES + ["discount_received", "purchased"]
     ].copy()
 
-    # Convert categorical features into numeric indicator columns.
+    # --------------------------------------------------------
+    # STEP 2: ENCODE CATEGORICAL VARIABLES
+    # --------------------------------------------------------
+
     model_data = pd.get_dummies(
         model_data,
         columns=CATEGORICAL_FEATURES,
@@ -107,14 +140,20 @@ def estimate_discount_effect(df):
         dtype=int,
     )
 
-    # Identify the expanded set of feature columns.
+    # Identify encoded feature columns.
     encoded_features = [
         col
         for col in model_data.columns
-        if col not in ["discount_received", "purchased"]
+        if col not in [
+            "discount_received",
+            "purchased",
+        ]
     ]
 
-    # Prepare data for Double Machine Learning.
+    # --------------------------------------------------------
+    # STEP 3: PREPARE DOUBLEML DATA
+    # --------------------------------------------------------
+
     data = dml.DoubleMLData(
         model_data,
         y_col="purchased",
@@ -122,7 +161,11 @@ def estimate_discount_effect(df):
         x_cols=encoded_features,
     )
 
-    # Estimate purchase probabilities under each treatment group.
+    # --------------------------------------------------------
+    # STEP 4: OUTCOME MODEL
+    # --------------------------------------------------------
+
+    # Predict purchase probability using customer features.
     outcome_model = Pipeline(
         steps=[
             (
@@ -138,7 +181,11 @@ def estimate_discount_effect(df):
         ]
     )
 
-    # Estimate the probability of receiving a discount.
+    # --------------------------------------------------------
+    # STEP 5: PROPENSITY SCORE MODEL
+    # --------------------------------------------------------
+
+    # Predict probability of receiving a discount.
     propensity_model = Pipeline(
         steps=[
             (
@@ -154,6 +201,10 @@ def estimate_discount_effect(df):
         ]
     )
 
+    # --------------------------------------------------------
+    # STEP 6: DOUBLEML IRM
+    # --------------------------------------------------------
+
     estimator = dml.DoubleMLIRM(
         data,
         ml_g=clone(outcome_model),
@@ -165,8 +216,16 @@ def estimate_discount_effect(df):
         trimming_threshold=0.01,
     )
 
+    # --------------------------------------------------------
+    # STEP 7: TRAIN MODEL
+    # --------------------------------------------------------
+
     print("\nTraining the cross-fitted DML model...")
     estimator.fit()
+
+    # --------------------------------------------------------
+    # STEP 8: DISPLAY ESTIMATION RESULTS
+    # --------------------------------------------------------
 
     print("\n--- ESTIMATION RESULTS ---")
     print(estimator.summary)
@@ -179,15 +238,22 @@ def estimate_discount_effect(df):
     lower = float(confidence_interval.iloc[0, 0])
     upper = float(confidence_interval.iloc[0, 1])
 
+    # --------------------------------------------------------
+    # STEP 9: INTERPRETATION
+    # --------------------------------------------------------
+
     print("\n--- INTERPRETATION ---")
+
     print(
         "Estimated purchase-probability effect:",
         f"{estimate * 100:.2f} percentage points",
     )
+
     print(
         "Standard error:",
         f"{standard_error:.4f}",
     )
+
     print(
         "95% confidence interval:",
         f"[{lower * 100:.2f}, {upper * 100:.2f}]",
@@ -202,10 +268,18 @@ def estimate_discount_effect(df):
     return estimator
 
 
+# ============================================================
+# MAIN FUNCTION
+# ============================================================
+
 def main():
     df = load_data()
     estimate_discount_effect(df)
 
+
+# ============================================================
+# EXECUTION
+# ============================================================
 
 if __name__ == "__main__":
     main()
