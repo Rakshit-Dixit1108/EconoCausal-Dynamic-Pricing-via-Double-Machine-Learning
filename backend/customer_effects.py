@@ -3,7 +3,7 @@
 
 import pandas as pd
 
-from causal_model import load_data, estimate_discount_effect
+from backend.causal_model import load_data, estimate_discount_effect
 
 
 def estimate_segment_effects(df=None):
