@@ -1,59 +1,44 @@
+"""FastAPI application for the EconoCausal project.
 
-"""FastAPI application for the EconoCausal project."""
+Run from the repository root:
+    python -m uvicorn backend.main:app --reload
+"""
 
 from pathlib import Path
 import shutil
 import tempfile
+from typing import Any
 
 import pandas as pd
-
-from fastapi import (
-    FastAPI,
-    HTTPException,
-    Query,
-    UploadFile,
-    File,
-)
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from data_service import load_data, get_data_summary
-from optimization import analyze_discount_levels, recommend_discount
-from customer_effects import estimate_segment_effects
-from spending_clustering import run_spending_clustering
+# Always use package-qualified imports when starting with
+# `python -m uvicorn backend.main:app`.
+from backend.data_service import get_data_summary, load_data
+from backend.optimization import analyze_discount_levels, recommend_discount
+from backend.customer_effects import estimate_segment_effects
+from backend.spending_clustering import run_spending_clustering
 
 
-# ============================================================
-# FASTAPI APPLICATION
-# ============================================================
+# ---------------------------------------------------------------------------
+# Application configuration
+# ---------------------------------------------------------------------------
+APP_VERSION = "1.3.1"
 
 app = FastAPI(
     title="EconoCausal API",
     description=(
-        "API for customer data validation, exploratory discount "
-        "optimization, customer segment effects, and spending clusters."
+        "API for dataset validation, discount analysis, customer segment "
+        "effects, and spending clusters."
     ),
-    version="1.3.0",
+    version=APP_VERSION,
 )
 
-
-# ============================================================
-# PROJECT PATHS
-# ============================================================
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
-
 IMPORTED_DATA_PATH = DATA_DIR / "imported_customers.csv"
-
-DEFAULT_DATA_PATH = (
-    DATA_DIR / "econocausal_synthetic_customers.csv"
-)
-
-
-# ============================================================
-# CORS CONFIGURATION
-# ============================================================
+DEFAULT_DATA_PATH = DATA_DIR / "econocausal_synthetic_customers.csv"
 
 app.add_middleware(
     CORSMiddleware,
@@ -69,37 +54,43 @@ app.add_middleware(
 )
 
 
-# ============================================================
-# ACTIVE DATASET
-# ============================================================
-
-def load_current_data():
-    """Load imported data when available; otherwise use default."""
-
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+def load_current_data() -> pd.DataFrame:
+    """Load imported CSV when available; otherwise load the default dataset."""
     selected_path = (
-        IMPORTED_DATA_PATH
-        if IMPORTED_DATA_PATH.exists()
-        else DEFAULT_DATA_PATH
+        IMPORTED_DATA_PATH if IMPORTED_DATA_PATH.is_file() else DEFAULT_DATA_PATH
     )
-
+    if not selected_path.is_file():
+        raise FileNotFoundError(
+            f"Dataset not found: {selected_path}. "
+            "Put the default CSV in the project's data folder or upload a CSV."
+        )
     return load_data(file_path=selected_path)
 
 
-# ============================================================
-# ROOT ENDPOINT
-# ============================================================
+def _raise_data_error(exc: Exception, message: str) -> None:
+    """Convert expected data errors to HTTP responses without leaking tracebacks."""
+    if isinstance(exc, FileNotFoundError):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if isinstance(exc, (ValueError, pd.errors.ParserError)):
+        raise HTTPException(status_code=422, detail=f"{message}: {exc}") from exc
+    raise HTTPException(status_code=500, detail=f"{message}: {exc}") from exc
 
-@app.get("/")
-def root():
-    """Return basic API information."""
 
+# ---------------------------------------------------------------------------
+# Root and health
+# ---------------------------------------------------------------------------
+@app.get("/", tags=["System"])
+def root() -> dict[str, Any]:
     return {
         "project": "EconoCausal",
         "message": "EconoCausal API is running.",
-        "version": "1.3.0",
+        "version": APP_VERSION,
         "docs": "/docs",
+        "health": "/health",
         "endpoints": [
-            "/health",
             "/data-summary",
             "/upload-csv",
             "/optimization",
@@ -109,28 +100,17 @@ def root():
     }
 
 
-# ============================================================
-# HEALTH ENDPOINT
-# ============================================================
-
-@app.get("/health")
-def health():
-    """Check API availability."""
-
-    return {
-        "status": "healthy",
-        "service": "EconoCausal API",
-    }
+@app.get("/health", tags=["System"])
+def health() -> dict[str, str]:
+    return {"status": "healthy", "service": "EconoCausal API"}
 
 
-# ============================================================
-# CSV UPLOAD ENDPOINT
-# ============================================================
-
-@app.post("/upload-csv")
-def upload_csv(file: UploadFile = File(...)):
-    """Validate a customer CSV and make it the active dataset."""
-
+# ---------------------------------------------------------------------------
+# CSV upload
+# ---------------------------------------------------------------------------
+@app.post("/upload-csv", tags=["Dataset"])
+def upload_csv(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Validate an uploaded CSV and activate it only after validation succeeds."""
     if not file.filename or Path(file.filename).suffix.lower() != ".csv":
         raise HTTPException(
             status_code=400,
@@ -138,101 +118,58 @@ def upload_csv(file: UploadFile = File(...)):
         )
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    temporary_path = None
+    temporary_path: Path | None = None
 
     try:
-        # Save uploaded file temporarily.
         with tempfile.NamedTemporaryFile(
-            mode="wb",
-            suffix=".csv",
-            dir=DATA_DIR,
-            delete=False,
+            mode="wb", suffix=".csv", dir=DATA_DIR, delete=False
         ) as temp_file:
-
             temporary_path = Path(temp_file.name)
-
             shutil.copyfileobj(file.file, temp_file)
 
-        # Validate before replacing the active dataset.
-        df = load_data(file_path=temporary_path)
+        # Validation must complete before replacing the active dataset.
+        dataframe = load_data(file_path=temporary_path)
+        summary = get_data_summary(dataframe)
 
-        # Activate uploaded dataset after successful validation.
         temporary_path.replace(IMPORTED_DATA_PATH)
         temporary_path = None
-
-        summary = get_data_summary(df)
 
         return {
             "status": "success",
             "message": "Dataset imported and validated successfully.",
             "filename": Path(file.filename).name,
             "active_dataset": IMPORTED_DATA_PATH.name,
-            "rows": int(len(df)),
-            "columns": int(len(df.columns)),
-            "column_names": list(df.columns),
+            "rows": int(dataframe.shape[0]),
+            "columns": int(dataframe.shape[1]),
+            "column_names": list(dataframe.columns),
             "summary": summary,
         }
-
-    except (ValueError, pd.errors.ParserError) as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Dataset validation failed: {exc}",
-        ) from exc
-
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=str(exc),
-        ) from exc
-
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to import the dataset.",
-        ) from exc
-
+        _raise_data_error(exc, "Unable to import dataset")
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
-
         file.file.close()
 
 
-# ============================================================
-# DATA SUMMARY ENDPOINT
-# ============================================================
-
-@app.get("/data-summary")
-def data_summary():
-    """Return summary statistics for the active dataset."""
-
+# ---------------------------------------------------------------------------
+# Data summary
+# ---------------------------------------------------------------------------
+@app.get("/data-summary", tags=["Dataset"])
+def data_summary() -> dict[str, Any]:
     try:
-        df = load_current_data()
-
-        return {
-            "status": "success",
-            "data": get_data_summary(df),
-        }
-
-    except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=str(exc),
-        ) from exc
-
+        dataframe = load_current_data()
+        return {"status": "success", "data": get_data_summary(dataframe)}
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to generate dataset summary.",
-        ) from exc
+        _raise_data_error(exc, "Unable to generate dataset summary")
 
 
-# ============================================================
-# DISCOUNT OPTIMIZATION ENDPOINT
-# ============================================================
-
-@app.get("/optimization")
+# ---------------------------------------------------------------------------
+# Discount analysis (observational, not causal)
+# ---------------------------------------------------------------------------
+@app.get("/optimization", tags=["Analysis"])
 def optimization(
     budget_inr: float | None = Query(
         default=None,
@@ -244,19 +181,11 @@ def optimization(
         gt=0,
         description="Number of customers to evaluate.",
     ),
-):
-    """Compare observed discount levels; this is not causal."""
-
+) -> dict[str, Any]:
     try:
-        df = load_current_data()
-
-        summary = analyze_discount_levels(df)
-
-        target_customers = (
-            customers
-            if customers is not None
-            else len(df)
-        )
+        dataframe = load_current_data()
+        summary = analyze_discount_levels(dataframe)
+        target_customers = int(customers or len(dataframe))
 
         best, candidates = recommend_discount(
             summary,
@@ -264,65 +193,36 @@ def optimization(
             budget_inr=budget_inr,
         )
 
-        # ----------------------------------------------------
-        # DISCOUNT LEVELS
-        # ----------------------------------------------------
-
         discount_levels = []
-
         for _, row in summary.iterrows():
-
-            discount_levels.append({
-                "discount_percent": float(
-                    row["discount_percent"]
-                ),
-                "customers": int(
-                    row["customers"]
-                ),
-                "purchase_rate_percent": round(
-                    float(row["purchase_rate_percent"]),
-                    2,
-                ),
-                "avg_discount_cost_inr": round(
-                    float(row["avg_discount_cost_inr"]),
-                    2,
-                ),
-                "avg_net_revenue_inr": round(
-                    float(row["avg_net_revenue_inr"]),
-                    2,
-                ),
-            })
-
-        # ----------------------------------------------------
-        # RECOMMENDATION
-        # ----------------------------------------------------
+            discount_levels.append(
+                {
+                    "discount_percent": float(row["discount_percent"]),
+                    "customers": int(row["customers"]),
+                    "purchase_rate_percent": round(
+                        float(row["purchase_rate_percent"]), 2
+                    ),
+                    "avg_discount_cost_inr": round(
+                        float(row["avg_discount_cost_inr"]), 2
+                    ),
+                    "avg_net_revenue_inr": round(
+                        float(row["avg_net_revenue_inr"]), 2
+                    ),
+                }
+            )
 
         recommendation = None
-
         if best is not None:
-
             recommendation = {
-                "discount_percent": float(
-                    best["discount_percent"]
-                ),
+                "discount_percent": float(best["discount_percent"]),
                 "avg_net_revenue_inr": round(
-                    float(best["avg_net_revenue_inr"]),
-                    2,
+                    float(best["avg_net_revenue_inr"]), 2
                 ),
                 "estimated_total_discount_cost_inr": round(
-                    float(
-                        best[
-                            "estimated_total_discount_cost_inr"
-                        ]
-                    ),
-                    2,
+                    float(best["estimated_total_discount_cost_inr"]), 2
                 ),
                 "customers_evaluated": target_customers,
             }
-
-        # ----------------------------------------------------
-        # API RESPONSE
-        # ----------------------------------------------------
 
         return {
             "status": "success",
@@ -331,8 +231,7 @@ def optimization(
             "budget_inr": budget_inr,
             "discount_levels": discount_levels,
             "eligible_discount_levels": [
-                float(row["discount_percent"])
-                for _, row in candidates.iterrows()
+                float(row["discount_percent"]) for _, row in candidates.iterrows()
             ],
             "recommendation": recommendation,
             "limitations": [
@@ -345,59 +244,41 @@ def optimization(
                 ),
             ],
         }
-
-    except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=str(exc),
-        ) from exc
-
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to generate discount analysis.",
-        ) from exc
+        _raise_data_error(exc, "Unable to generate discount analysis")
 
 
-# ============================================================
-# CUSTOMER SEGMENT EFFECTS ENDPOINT
-# ============================================================
-
-@app.get("/segment-effects")
-def segment_effects():
-    """Estimate group-level discount effects using active data."""
-
+# ---------------------------------------------------------------------------
+# Customer segment effects
+# ---------------------------------------------------------------------------
+@app.get("/segment-effects", tags=["Analysis"])
+def segment_effects() -> dict[str, Any]:
+    """Return group-level discount-effect estimates and 95% confidence intervals."""
     try:
-        df = load_current_data()
-
-        gate_model = estimate_segment_effects(df)
-
-        intervals = gate_model.confint(level=0.95)
+        dataframe = load_current_data()
+        model = estimate_segment_effects(dataframe)
+        intervals = model.confint(level=0.95)
 
         segments = []
-
         for group, row in intervals.iterrows():
-
             effect = float(row["effect"])
             lower = float(row["2.5 %"])
             upper = float(row["97.5 %"])
-
-            segments.append({
-                "segment": str(group).replace("Group_", ""),
-                "effect": round(effect, 6),
-                "effect_percentage_points": round(
-                    effect * 100,
-                    2,
-                ),
-                "confidence_interval_95": {
-                    "lower": round(lower, 6),
-                    "upper": round(upper, 6),
-                },
-                "confidence_interval_percentage_points": {
-                    "lower": round(lower * 100, 2),
-                    "upper": round(upper * 100, 2),
-                },
-            })
+            segments.append(
+                {
+                    "segment": str(group).replace("Group_", ""),
+                    "effect": round(effect, 6),
+                    "effect_percentage_points": round(effect * 100, 2),
+                    "confidence_interval_95": {
+                        "lower": round(lower, 6),
+                        "upper": round(upper, 6),
+                    },
+                    "confidence_interval_percentage_points": {
+                        "lower": round(lower * 100, 2),
+                        "upper": round(upper * 100, 2),
+                    },
+                }
+            )
 
         return {
             "status": "success",
@@ -406,62 +287,37 @@ def segment_effects():
             "treatment": "discount_received",
             "segments": segments,
             "limitations": [
-                (
-                    "Results are group-level estimates, not individual "
-                    "customer effects."
-                ),
+                "Results are group-level estimates, not individual customer effects.",
                 "Causal interpretation depends on identification assumptions.",
                 "A confidence interval containing zero indicates uncertainty.",
             ],
         }
-
-    except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=str(exc),
-        ) from exc
-
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to estimate customer segment effects.",
-        ) from exc
+        _raise_data_error(exc, "Unable to estimate customer segment effects")
 
 
-# ============================================================
-# SPENDING CLUSTERS ENDPOINT
-# ============================================================
-
-@app.get("/spending-clusters")
-def spending_clusters():
-    """Return K-Means clusters based on income and spending."""
-
+# ---------------------------------------------------------------------------
+# Spending clusters
+# ---------------------------------------------------------------------------
+@app.get("/spending-clusters", tags=["Analysis"])
+def spending_clusters() -> dict[str, Any]:
+    """Return K-Means spending clusters for purchasers in the active dataset."""
     try:
-        df = load_current_data()
-
-        result = run_spending_clustering(df)
-
+        dataframe = load_current_data()
+        result = run_spending_clustering(dataframe)
         profile = result["profile"]
 
         cluster_profiles = []
-
         for cluster_id, row in profile.iterrows():
-
-            cluster_profiles.append({
-                "cluster_id": int(cluster_id),
-                "customer_count": int(
-                    row["customer_count"]
-                ),
-                "average_income_inr": float(
-                    row["average_income"]
-                ),
-                "average_basket_value_inr": float(
-                    row["average_basket_value"]
-                ),
-                "average_purchases_12m": float(
-                    row["average_purchases_12m"]
-                ),
-            })
+            cluster_profiles.append(
+                {
+                    "cluster_id": int(cluster_id),
+                    "customer_count": int(row["customer_count"]),
+                    "average_income_inr": float(row["average_income"]),
+                    "average_basket_value_inr": float(row["average_basket_value"]),
+                    "average_purchases_12m": float(row["average_purchases_12m"]),
+                }
+            )
 
         return {
             "status": "success",
@@ -471,14 +327,10 @@ def spending_clusters():
                 "basket_value_inr",
                 "past_purchases_12m",
             ],
-            "selected_cluster_count": int(
-                result["best_k"]
-            ),
+            "selected_cluster_count": int(result["best_k"]),
             "silhouette_scores": {
                 str(k): float(score)
-                for k, score in result[
-                    "silhouette_scores"
-                ].items()
+                for k, score in result["silhouette_scores"].items()
             },
             "cluster_profiles": cluster_profiles,
             "output_file": "data/customer_spending_clusters.csv",
@@ -489,15 +341,5 @@ def spending_clusters():
                 "Cluster IDs are arbitrary labels.",
             ],
         }
-
-    except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=str(exc),
-        ) from exc
-
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to generate spending clusters.",
-        ) from exc
+        _raise_data_error(exc, "Unable to generate spending clusters")
