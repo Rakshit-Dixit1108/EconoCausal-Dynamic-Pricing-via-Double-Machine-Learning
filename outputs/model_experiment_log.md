@@ -162,6 +162,31 @@ The classifier did not demonstrate consistent overall predictive improvement.
 
 **Status:** Evaluation completed successfully.
 
+## Experiment 4: Treatment Distribution Analysis
+
+**Objective:** Analyze customer distribution and purchase rates across discount levels.
+
+**Dataset size:** 5,000 customers
+
+| Discount | Customers | Customer Percentage | Purchase Rate |
+|---|---:|---:|---:|
+| 0% | 2290 | 45.80% | 50.92% |
+| 5% | 913 | 18.26% | 50.38% |
+| 10% | 1242 | 24.84% | 55.39% |
+| 20% | 555 | 11.10% | 61.44% |
+
+**Observations:**
+- The 0% discount group contains the most customers.
+- The 20% discount group contains the fewest customers.
+- The 20% discount group has the highest observed purchase rate.
+- Treatment group sizes are unequal.
+
+**Interpretation:**
+
+The distribution analysis identifies differences in customer counts across treatment levels. Unequal group sizes should be considered during propensity overlap and causal diagnostics. These descriptive purchase rates do not establish causal effects.
+
+**Output:** outputs/treatment_distribution.csv
+
 
 
 
