@@ -189,4 +189,47 @@ The distribution analysis identifies differences in customer counts across treat
 
 
 
+## Experiment 5: Multi-Treatment Propensity Score Analysis
+
+**Objective:** Estimate the probability of each customer receiving different discount levels using a Random Forest Classifier.
+
+**Dataset:** 5,000 customers
+
+**Features:** Pre-treatment customer characteristics.
+
+**Treatment levels:** 0%, 5%, 10%, 20%
+
+**Model configuration:**
+- RandomForestClassifier
+- Number of trees: 200
+- Minimum samples per leaf: 10
+- Max features: sqrt
+- Cross-validation: 3-fold StratifiedKFold
+- Random state: 42
+- Out-of-fold propensity predictions
+
+**Results:**
+
+| Discount | Customers | Mean actual-treatment propensity | Below 0.10 |
+|---|---:|---:|---:|
+| 0% | 2290 | 0.482817 | 0 |
+| 5% | 913 | 0.193507 | 28 |
+| 10% | 1242 | 0.258586 | 3 |
+| 20% | 555 | 0.109963 | 219 |
+
+**Interpretation:**
+
+The 20% discount group has 219 customers with estimated actual-treatment propensity below 0.10. This indicates a potential overlap concern that requires further investigation.
+
+These results are preliminary diagnostics and do not independently establish a lack of common support.
+
+**Outputs:**
+- `outputs/propensity_overlap_diagnostics.csv`
+- `outputs/propensity_overlap_summary.csv`
+
+**Status:** Analysis completed successfully.
+
+
+
+
 
