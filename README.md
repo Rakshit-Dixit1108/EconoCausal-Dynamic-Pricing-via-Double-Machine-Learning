@@ -9,7 +9,7 @@ This project aims to estimate the causal impact of different discount levels on 
 - Treatment: Discount percentage (0%, 5%, 10%, 20%)
 - Outcome: Purchase status (0 or 1)
 
-## My Contribution – Causal ML Engine
+## Causal ML Engine
 - Implemented a multi-level DML model using EconML.
 - Used Random Forest models.
 - Evaluated outcome-model performance.
