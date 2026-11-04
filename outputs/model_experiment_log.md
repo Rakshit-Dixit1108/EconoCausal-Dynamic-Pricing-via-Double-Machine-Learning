@@ -128,5 +128,40 @@ Compare the baseline with a classifier-based outcome model appropriate for the b
 
 The estimated effects changed slightly relative to the baseline. This does not establish better predictive accuracy or more reliable causal estimates. Further predictive evaluation and causal robustness checks are needed before selecting the final configuration.
 
+## Experiment 3: Held-Out Predictive Evaluation
+
+**Objective:** Compare baseline and classifier-based outcome models on unseen customer data.
+
+**Dataset:** 5,000 customers
+
+**Data split:**
+- Training samples: 4,000 (80%)
+- Testing samples: 1,000 (20%)
+- Random state: 42
+- Stratified split based on purchase outcome.
+
+**Results:**
+
+| Metric | Baseline Regressor | Classifier |
+|---|---:|---:|
+| Accuracy | 0.617000 | 0.608000 |
+| Balanced Accuracy | 0.611228 | 0.600388 |
+| Precision | 0.623333 | 0.610493 |
+| Recall | 0.704331 | 0.723164 |
+| F1-score | 0.661362 | 0.662069 |
+| ROC-AUC | 0.650986 | 0.649424 |
+| Brier Score | 0.233042 | 0.233186 |
+
+**Interpretation:**
+
+The baseline model performed slightly better in accuracy, balanced accuracy, precision, ROC-AUC, and Brier score. The classifier achieved slightly higher recall and F1-score.
+
+The classifier did not demonstrate consistent overall predictive improvement.
+
+**Output:** `outputs/heldout_predictive_metrics.csv`
+
+**Status:** Evaluation completed successfully.
+
+
 
 
