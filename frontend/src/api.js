@@ -1,92 +1,45 @@
+import axios from "axios";
 
-const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000"
-).replace(/\/+$/, "");
+const api = axios.create({
+  baseURL:
+    import.meta.env.VITE_API_BASE_URL ||
+    "http://127.0.0.1:8000",
+  timeout: 120000,
+});
 
-async function apiRequest(endpoint, options = {}) {
-  let response;
+export const summary = () => api.get("/data-summary");
+export const health = () => api.get("/health");
 
-  try {
-    response = await fetch(`${API_BASE_URL}${endpoint}`, options);
-  } catch {
-    throw new Error(
-      "Cannot connect to the EconoCausal backend. " +
-      "Make sure FastAPI is running and the API URL is correct."
-    );
-  }
+export const optimize = (budget, customers) =>
+  api.get("/optimization", {
+    params: {
+      budget_inr: budget,
+      customers,
+    },
+  });
 
-  if (!response.ok) {
-    let message = `API request failed (${response.status})`;
+export const clusters = () => api.get("/spending-clusters");
+export const segments = () => api.get("/segment-effects");
 
-    try {
-      const errorData = await response.json();
-
-      if (errorData.detail) {
-        message =
-          typeof errorData.detail === "string"
-            ? errorData.detail
-            : JSON.stringify(errorData.detail);
-      }
-    } catch {
-      // Keep the default error message.
-    }
-
-    throw new Error(message);
-  }
-
-  return response.json();
-}
-
-// Check whether the backend is running.
-export function getHealth() {
-  return apiRequest("/health");
-}
-
-// Get a summary of the currently active dataset.
-export function getDataSummary() {
-  return apiRequest("/data-summary");
-}
-
-// Upload a CSV file and activate it after backend validation.
-export function uploadCsv(file) {
+export const upload = (file) => {
   const formData = new FormData();
   formData.append("file", file);
+  return api.post("/upload-csv", formData);
+};
 
-  return apiRequest("/upload-csv", {
-    method: "POST",
-    body: formData,
-  });
-}
+export const dashboardData = () => api.get("/dashboard-data");
 
-// Compare observed discount levels.
-export function getOptimization(options = {}) {
-  const params = new URLSearchParams();
+// Advanced causal analysis
+export const advancedMultilevel = () =>
+  api.get("/advanced-causal/multilevel");
 
-  if (options.budgetInr != null) {
-    params.set("budget_inr", String(options.budgetInr));
-  }
+export const advancedPropensity = () =>
+  api.get("/advanced-causal/propensity");
 
-  if (options.customers != null) {
-    params.set("customers", String(options.customers));
-  }
+export const advancedDiagnostics = () =>
+  api.get("/advanced-causal/diagnostics");
 
-  const query = params.toString();
+export const advancedRefutation = () =>
+  api.get("/advanced-causal/refutation");
 
-  return apiRequest(
-    `/optimization${query ? `?${query}` : ""}`
-  );
-}
-
-// Group-level causal effect estimates.
-// Note: the current backend may use its configured dataset
-// rather than the currently uploaded dataset.
-export function getSegmentEffects() {
-  return apiRequest("/segment-effects");
-}
-
-// Customer spending clusters.
-// Note: the current backend may use its configured dataset
-// rather than the currently uploaded dataset.
-export function getSpendingClusters() {
-  return apiRequest("/spending-clusters");
-}
+export default api;
