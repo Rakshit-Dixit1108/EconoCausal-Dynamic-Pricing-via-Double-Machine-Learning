@@ -1,0 +1,12 @@
+
+fastapi
+uvicorn[standard]
+pandas
+numpy
+scikit-learn
+doubleml
+econml
+dowhy
+statsmodels
+joblib
+python-multipart
